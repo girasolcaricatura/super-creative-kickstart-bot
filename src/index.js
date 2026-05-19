@@ -1,12 +1,11 @@
-const express = require('express');
-const fetch = require('node-fetch');
-
-const app = express();
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
+// Super Creative Kickstart — Slack bot en Cloudflare Workers
+// Endpoints:
+//   GET  /          -> health check
+//   POST /kickstart -> recibe el slash command de Slack
+//
+// Variables de entorno (configuradas como Worker Secrets en el Dashboard):
+//   ANTHROPIC_API_KEY
+//   SLACK_BOT_TOKEN
 
 const PROMPT_MAESTRO = `Eres el SUPER CREATIVE KICKSTART, una herramienta de ideación para creativos de agencias de experiential marketing, BTL y activaciones de marca. Tu rol es generar munición creativa — no propuestas terminadas, sino disparadores que abran posibilidades que el creativo no habría encontrado solo.
 
@@ -62,48 +61,37 @@ REGLAS:
 BRIEF:
 `;
 
-async function callAnthropic(brief) {
+// Sonnet 4 con 4000 tokens para output completo y de máxima calidad.
+// Alternativa más barata si llegara a escalar mucho: "claude-haiku-4-5-20251001".
+const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
+const MAX_TOKENS = 4000;
+
+async function callAnthropic(brief, apiKey) {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [{ role: 'user', content: PROMPT_MAESTRO + brief }]
-    })
+      model: ANTHROPIC_MODEL,
+      max_tokens: MAX_TOKENS,
+      messages: [{ role: 'user', content: PROMPT_MAESTRO + brief }],
+    }),
   });
   const data = await response.json();
-
-if (!response.ok) {
-  throw new Error(data.error?.message || JSON.stringify(data));
+  if (!data.content || !data.content[0]) {
+    throw new Error('Respuesta inválida de Anthropic: ' + JSON.stringify(data));
+  }
+  return data.content[0].text;
 }
 
-if (!data.content || !data.content[0]) {
-  throw new Error("Claude respondió sin contenido: " + JSON.stringify(data));
-}
-
-return data.content[0].text;
-}
-const brief = text?.trim();
-
-if (!brief) {
-  return res.json({
-    response_type: "ephemeral",
-    text: "Pásame el brief después del comando. Ejemplo: /kickstart necesito una campaña para Miller High Life..."
-  });
-}
-
-async function postToSlack(channel, text, thread_ts) {
-  // Slack tiene límite de 3000 chars por mensaje — dividimos en bloques
+async function postToSlack(channel, text, slackToken, thread_ts) {
+  // Slack tiene límite de 3000 chars por mensaje — partimos en chunks
   const chunks = [];
   let current = '';
-  const lines = text.split('\n');
-  
-  for (const line of lines) {
+  for (const line of text.split('\n')) {
     if ((current + '\n' + line).length > 2800) {
       chunks.push(current);
       current = line;
@@ -118,42 +106,77 @@ async function postToSlack(channel, text, thread_ts) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SLACK_BOT_TOKEN}`
+        Authorization: `Bearer ${slackToken}`,
       },
       body: JSON.stringify({
         channel,
         text: chunk,
         thread_ts,
-        mrkdwn: true
-      })
+        mrkdwn: true,
+      }),
     });
   }
 }
 
-app.post('/kickstart', async (req, res) => {
-  const { text, channel_id, user_name, response_url } = req.body;
-
-  // Respuesta inmediata a Slack (tiene timeout de 3 segundos)
-  res.json({
-    response_type: 'in_channel',
-    text: `⚡ *Super Creative Kickstart iniciado por @${user_name}*\nAnalizando el brief... esto tarda ~30 segundos.`
-  });
-
-  // Procesamos en background
+async function processKickstart(brief, channel_id, response_url, env) {
   try {
-    const brief = text || 'Brief no proporcionado';
-    const kickstart = await callAnthropic(brief);
-    await postToSlack(channel_id, kickstart, null);
+    const kickstart = await callAnthropic(brief, env.ANTHROPIC_API_KEY);
+    await postToSlack(channel_id, kickstart, env.SLACK_BOT_TOKEN, null);
   } catch (err) {
-    await fetch(response_url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: `Error generando el kickstart: ${err.message}` })
-    });
+    console.error('Error generando kickstart:', err);
+    if (response_url) {
+      await fetch(response_url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: `:warning: Error generando el kickstart: ${err.message}`,
+        }),
+      });
+    }
   }
-});
+}
 
-app.get('/', (req, res) => res.send('Super Creative Kickstart bot activo ✓'));
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+    // Health check
+    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
+      return new Response('Super Creative Kickstart bot activo ✓\n', {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
+
+    // Slack slash command
+    if (request.method === 'POST' && url.pathname === '/kickstart') {
+      if (!env.ANTHROPIC_API_KEY || !env.SLACK_BOT_TOKEN) {
+        return new Response(
+          JSON.stringify({ text: 'Faltan secrets ANTHROPIC_API_KEY o SLACK_BOT_TOKEN' }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const body = await request.text();
+      const params = new URLSearchParams(body);
+      const text = params.get('text') || '';
+      const channel_id = params.get('channel_id');
+      const user_name = params.get('user_name') || 'alguien';
+      const response_url = params.get('response_url');
+      const brief = text.trim() || 'Brief no proporcionado';
+
+      // Trabajo en background — no bloquea la respuesta a Slack
+      ctx.waitUntil(processKickstart(brief, channel_id, response_url, env));
+
+      // Slack exige respuesta en <3s
+      return new Response(
+        JSON.stringify({
+          response_type: 'in_channel',
+          text: `:zap: *Super Creative Kickstart iniciado por @${user_name}*\nAnalizando el brief... esto tarda ~15-30 segundos.`,
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response('Not found', { status: 404 });
+  },
+};

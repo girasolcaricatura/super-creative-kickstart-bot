@@ -1,0 +1,7 @@
+name = "super-creative-kickstart-bot"
+main = "src/index.js"
+compatibility_date = "2024-09-01"
+
+# Los secrets (ANTHROPIC_API_KEY, SLACK_BOT_TOKEN) se configuran
+# en el Dashboard de Cloudflare o con `wrangler secret put`.
+# NO ponerlos aquí: este archivo va al repo.
