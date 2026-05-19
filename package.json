@@ -1,13 +1,15 @@
 {
   "name": "super-creative-kickstart-bot",
-  "version": "2.0.0",
-  "description": "Bot de Slack para el Super Creative Kickstart (Cloudflare Workers)",
-  "main": "src/index.js",
+  "version": "1.0.0",
+  "description": "Slack bot para Super Creative Kickstart en Railway",
+  "main": "server.js",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "start": "node server.js"
   },
-  "devDependencies": {
-    "wrangler": "^3.78.0"
+  "dependencies": {
+    "express": "^4.18.3"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
