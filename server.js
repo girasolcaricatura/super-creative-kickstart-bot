@@ -1,14 +1,13 @@
-const express = require('express');
-const fetch = require('node-fetch');
+const express = require("express");
 
 const app = express();
+
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 
-const PROMPT_MAESTRO = `Eres el SUPER CREATIVE KICKSTART, una herramienta de ideación para creativos de agencias de experiential marketing, BTL y activaciones de marca. Tu rol es generar munición creativa — no propuestas terminadas, sino disparadores que abran posibilidades que el creativo no habría encontrado solo.
+const PROMPT_MAESTRO = `Eres el SUPER CREATIVE KICKSTART, una herramienta de ideación para creativos de agencias de experiential marketing, BTL y activaciones de marca. Tu rol es generar munición creativa, no propuestas terminadas, sino disparadores que abran posibilidades que el creativo no habría encontrado solo.
 
 Cuando recibas un brief, genera el siguiente output completo:
 
@@ -22,138 +21,159 @@ Cuatro ángulos distintos del mismo brief:
 
 ## 2. UNIVERSOS SEMÁNTICOS
 
-No generes los cruces. Despliega los dos universos para que el creativo los combine libremente.
-
 *Universo A — [Marca]*
-Lista abundante de todos los elementos concretos y culturalmente cargados asociados a la marca: objetos, valores, territorios, rituales, momentos, símbolos, campañas icónicas, tonos, arquetipos, sensaciones. Mínimo 35 elementos. Sin abstracciones vacías — solo cosas reconocibles como parte de ese universo de marca.
+Lista abundante de elementos concretos asociados a la marca. Mínimo 35 elementos.
 
 *Universo B — [Contexto/Evento/Target]*
-Lista abundante de todos los elementos del contexto: lo que ocurre ahí, los universos culturales que lo rodean, las referencias del público, objetos, rituales, personajes, dinámicas, géneros, franquicias, sensaciones. Expándete hacia todo el ecosistema cultural. Investiga si es necesario. Mínimo 35 elementos.
+Lista abundante de elementos del contexto. Mínimo 35 elementos.
 
 ## 3. TRIGGER CARDS
 
-15 preguntas ¿Y si? específicas para ESTE brief. Solo la pregunta en negritas, sin explicación, sin subtítulo.
+15 preguntas ¿Y si? específicas para ESTE brief. Solo la pregunta en negritas.
 
-Organiza las 15 en 5 categorías de 3 cards cada una: Tiempo · Espacio · Usuario · Interacción · Contexto
+Organiza en 5 categorías: Tiempo, Espacio, Usuario, Interacción, Contexto.
 
 ## 4. POSIBILIDADES DE CONCEPTO
 
-10 direcciones posibles. Cada una: nombre del concepto + la idea en 2 líneas. Inspira, no dicta. Sé atrevido.
+10 direcciones posibles. Cada una: nombre del concepto + idea en 2 líneas.
 
 ## 5. BANCO DE LENGUAJE
 
-16 copies o namings sin jerarquía. Mezcla español e inglés según el tono del brief.
+16 copies o namings.
 
 ## 6. PROMPTS DE IMAGEN
 
-6 prompts para Midjourney o Gemini. Para cada uno: para qué sirve + el prompt completo listo para copiar.
+6 prompts para Midjourney o Gemini. Para cada uno: para qué sirve + prompt completo.
 
 ## 7. REFERENCIAS
 
-5 activaciones reales. Para cada una: por qué es relevante para ESTE brief + qué hicieron en 2 líneas + link.
+5 activaciones reales. Para cada una: por qué es relevante + qué hicieron + link.
 
 REGLAS:
-- Todo debe sentirse escrito para ESTE brief, nunca genérico
-- Los universos semánticos deben ser abundantes y concretos
-- Las trigger cards son solo la pregunta, sin explicación
-- Los conceptos inspiran, no prescriben
-- Nunca repitas triggers de otros briefs
+- Todo debe sentirse escrito para ESTE brief
+- Nada genérico
+- Sé útil, atrevido y concreto
+- Escribe en español
 
 BRIEF:
 `;
 
-async function callAnthropic(brief) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [{ role: 'user', content: PROMPT_MAESTRO + brief }]
-    })
-  });
-  const data = await response.json();
-
-if (!response.ok) {
-  throw new Error(data.error?.message || JSON.stringify(data));
-}
-
-if (!data.content || !data.content[0]) {
-  throw new Error("Claude respondió sin contenido: " + JSON.stringify(data));
-}
-
-return data.content[0].text;
-}
-const brief = text?.trim();
-
-if (!brief) {
-  return res.json({
-    response_type: "ephemeral",
-    text: "Pásame el brief después del comando. Ejemplo: /kickstart necesito una campaña para Miller High Life..."
-  });
-}
-
-async function postToSlack(channel, text, thread_ts) {
-  // Slack tiene límite de 3000 chars por mensaje — dividimos en bloques
+function splitMessage(text, maxLength = 2800) {
   const chunks = [];
-  let current = '';
-  const lines = text.split('\n');
-  
-  for (const line of lines) {
-    if ((current + '\n' + line).length > 2800) {
+  let current = "";
+
+  for (const line of text.split("\n")) {
+    if ((current + "\n" + line).length > maxLength) {
       chunks.push(current);
       current = line;
     } else {
-      current += (current ? '\n' : '') + line;
+      current += (current ? "\n" : "") + line;
     }
   }
+
   if (current) chunks.push(current);
+  return chunks;
+}
+
+async function sendToSlackResponseUrl(responseUrl, text) {
+  const chunks = splitMessage(text);
 
   for (const chunk of chunks) {
-    await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
+    await fetch(responseUrl, {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SLACK_BOT_TOKEN}`
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        channel,
-        text: chunk,
-        thread_ts,
-        mrkdwn: true
+        response_type: "in_channel",
+        text: chunk
       })
     });
   }
 }
 
-app.post('/kickstart', async (req, res) => {
-  const { text, channel_id, user_name, response_url } = req.body;
+async function callAnthropic(brief) {
+  if (!ANTHROPIC_API_KEY) {
+    throw new Error("Falta ANTHROPIC_API_KEY en Railway Variables");
+  }
 
-  // Respuesta inmediata a Slack (tiene timeout de 3 segundos)
-  res.json({
-    response_type: 'in_channel',
-    text: `⚡ *Super Creative Kickstart iniciado por @${user_name}*\nAnalizando el brief... esto tarda ~30 segundos.`
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4000,
+      messages: [
+        {
+          role: "user",
+          content: PROMPT_MAESTRO + brief
+        }
+      ]
+    })
   });
 
-  // Procesamos en background
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error?.message || JSON.stringify(data));
+  }
+
+  if (!data.content || !data.content[0] || !data.content[0].text) {
+    throw new Error("Claude respondió sin texto: " + JSON.stringify(data));
+  }
+
+  return data.content[0].text;
+}
+
+async function processKickstart({ brief, responseUrl }) {
   try {
-    const brief = text || 'Brief no proporcionado';
     const kickstart = await callAnthropic(brief);
-    await postToSlack(channel_id, kickstart, null);
+    await sendToSlackResponseUrl(responseUrl, kickstart);
   } catch (err) {
-    await fetch(response_url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: `Error generando el kickstart: ${err.message}` })
+    console.error("Error generando kickstart:", err);
+
+    await sendToSlackResponseUrl(
+      responseUrl,
+      `⚠️ Error generando el kickstart:\n${err.message}`
+    );
+  }
+}
+
+app.post("/kickstart", (req, res) => {
+  const brief = req.body.text?.trim();
+  const userName = req.body.user_name || "alguien";
+  const responseUrl = req.body.response_url;
+
+  if (!brief) {
+    return res.json({
+      response_type: "ephemeral",
+      text:
+        "Pásame el brief después del comando.\n\nEjemplo:\n/kickstart necesito una campaña para Miller High Life enfocada en vinyl collectors y golden hour"
     });
   }
+
+  res.json({
+    response_type: "in_channel",
+    text: `⚡ *Super Creative Kickstart iniciado por @${userName}*\nAnalizando el brief... esto tarda ~30 segundos.`
+  });
+
+  processKickstart({ brief, responseUrl });
 });
 
-app.get('/', (req, res) => res.send('Super Creative Kickstart bot activo ✓'));
+app.get("/", (req, res) => {
+  res.send("Super Creative Kickstart bot activo ✓");
+});
+
+app.get("/health", (req, res) => {
+  res.send("ok");
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en puerto ${PORT}`);
+});
